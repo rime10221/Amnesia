@@ -29,8 +29,9 @@ function lsSave(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return
 
 let data = lsLoad(LS.data, null) || { decks: {}, progress: {} };
 if (!data.progress) data.progress = {};
+const DEFAULT_CLIENT_ID = '83549191023-4v8ggp4pbt9q8oen511nk0cvv2jo9c4a.apps.googleusercontent.com'; // GCP project amnesia-511913 (public identifier)
 let settings = Object.assign({
-  clientId: '', autoSync: true, theme: 'auto', flipAnim: true, swipe: true, showHint: true,
+  clientId: DEFAULT_CLIENT_ID, autoSync: true, theme: 'auto', flipAnim: true, swipe: true, showHint: true,
   signedIn: false, sync: { folderId: null, fileId: null, lastSync: null, email: null }
 }, lsLoad(LS.set, {}));
 let sessions = lsLoad(LS.sess, {});

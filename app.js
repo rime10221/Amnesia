@@ -857,7 +857,9 @@ if (!(authRet && authRet.iframe)) {
       try { await getToken(false); if (settings.autoSync) runSync(false); }
       catch (e) {
         const k = 'amnesia.silentRedirect'; const last = +sessionStorage.getItem(k) || 0;
-        if (now() - last > 60000) { sessionStorage.setItem(k, String(now())); location.href = authUrl({ silent: true }); }
+        // fallback: one top-level round trip. With login_hint and an active Google session this bounces straight back;
+        // if Google needs a one-time consent it shows it once (no account chooser) instead of failing silently.
+        if (now() - last > 60000) { sessionStorage.setItem(k, String(now())); location.href = authUrl({ silent: !settings.sync.email }); }
         else { sync.needLogin = true; setStatus('error', '다시 로그인이 필요합니다'); }
       }
     }, 300);

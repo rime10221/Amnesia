@@ -136,3 +136,14 @@ table.preview th{background:var(--surface2)}
 .help{font-size:13px;color:var(--muted);line-height:1.6}
 .help ol{padding-left:18px;margin:6px 0}
 code{background:var(--surface2);padding:1px 5px;border-radius:5px;font-size:12px}
+
+/* v2: folders, images */
+.deck .dicon{width:34px;height:34px;border-radius:10px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;color:var(--muted)}
+.deck.folder .dicon{background:rgba(79,109,245,.12);font-size:18px}
+.thumb{width:52px;height:52px;border-radius:10px;overflow:hidden;background:var(--surface2);flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.imgwrap.missing::after{content:"🖼";color:var(--muted)}
+.face.hasimg{justify-content:flex-start;padding-top:44px}
+.imgwrap.big{width:100%;flex:0 1 auto;max-height:55%;display:flex;align-items:center;justify-content:center;margin-bottom:12px;min-height:60px}
+.imgwrap.big img{max-width:100%;max-height:100%;object-fit:contain;border-radius:12px;cursor:zoom-in}
+.face.hasimg .content{flex:0 0 auto}

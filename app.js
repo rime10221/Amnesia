@@ -661,38 +661,46 @@ function importModal(deckId, folderId) {
   imp = { deckId: deckId || null, folderId: folderId || null, step: 1, sheets: null, si: 0, header: null, colF: 0, colB: 1, colD: -1, target: deckId ? deckId : 'new', newName: '', skipDup: true, delim: 'auto', text: '', newFolderFor: null };
   renderImport();
 }
+const IMPORT_ACCEPT = '.xlsx,.xls,.xlsm,.csv,.txt,.tsv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12,text/csv,text/plain,text/tab-separated-values';
+async function readPickedFiles(files) {
+  const out = [];
+  for (const file of files) {
+    try { const r = await parseFile(file); const sheet = r.sheets.find(s => s.rows.length) || r.sheets[0]; out.push(Object.assign({ name: file.name.replace(/\.[^.]+$/, ''), rows: sheet.rows, sheets: r.sheets.filter(s => s.rows.length).length, all: r.sheets }, detectFor(sheet.rows))); }
+    catch (err) { out.push({ name: file.name, error: err.message, rows: [] }); }
+  }
+  return out;
+}
 function renderImport() {
   if (imp.step === 1) {
+    imp.picked ||= [];
+    const list = imp.picked.map((f, i) => `<div class="row" style="gap:6px;padding:4px 0;border-bottom:1px solid var(--line)"><span class="grow">📄 ${esc(f.name)} <span class="muted">${f.error ? '읽기 실패' : f.rows.length + '행'}</span></span><button class="btn sm ghost" data-rm="${i}">✕</button></div>`).join('');
     openModal(`<h3>카드 가져오기</h3>
-      <div class="help" style="margin-bottom:10px">엑셀(.xlsx) / CSV / 텍스트 파일을 선택하세요. 안드로이드에서는 파일 선택 창에서 <b>Google 드라이브</b>의 파일도 바로 고를 수 있습니다.</div>
-      <input type="file" id="imp-file" accept=".xlsx,.xls,.xlsm,.csv,.txt,.tsv" class="input" style="padding:8px" multiple>
-      <div class="muted" style="margin-top:4px">여러 파일을 한꺼번에 선택할 수 있습니다 (파일마다 세트 1개).</div>
+      <div class="help" style="margin-bottom:10px">엑셀(.xlsx) / CSV / 텍스트 파일을 고르세요. 한 번에 여러 개를 고를 수 있고(길게 눌러 선택), 선택 창이 하나씩만 허용하면 <b>파일 추가</b>를 반복해 목록에 쌓으면 됩니다. 안드로이드에서는 <b>Google 드라이브</b>의 파일도 고를 수 있습니다.</div>
+      <input type="file" id="imp-file" accept="${IMPORT_ACCEPT}" multiple hidden>
+      <button class="btn block" id="imp-pick">📂 ${imp.picked.length ? '파일 더 추가' : '파일 선택'}</button>
+      ${imp.picked.length ? `<div class="card-box" style="margin-top:8px;padding:6px 12px">${list}</div>` : ''}
       <div class="muted" style="margin:14px 0 6px">또는 직접 붙여넣기 (한 줄에 한 카드: <code>단어[Tab]뜻</code>, <code>단어 : 뜻</code>, <code>단어 - 뜻</code>)</div>
-      <textarea class="input" id="imp-text" rows="6" placeholder="자궁내막염(endometritis) : clindamycin + gentamicin&#10;유방염(mastitis) : dicloxacillin">${esc(imp.text)}</textarea>
+      <textarea class="input" id="imp-text" rows="${imp.picked.length ? 3 : 6}" placeholder="자궁내막염(endometritis) : clindamycin + gentamicin&#10;유방염(mastitis) : dicloxacillin">${esc(imp.text)}</textarea>
       <div class="row" style="margin-top:8px"><span class="muted">구분자</span><select class="input" id="imp-delim" style="width:auto;min-height:36px;padding:4px 8px"><option value="auto">자동</option><option value="tab">탭</option><option value="colon">콜론 :</option><option value="dash">하이픈 -</option><option value="comma">쉼표 ,</option></select></div>
-      <div class="foot"><button class="btn" data-action="close-modal">취소</button><button class="btn primary" id="imp-next">다음</button></div>`);
+      <div class="foot"><button class="btn" data-action="close-modal">취소</button><button class="btn primary" id="imp-next">${imp.picked.length ? `다음 (파일 ${imp.picked.length}개)` : '다음'}</button></div>`);
     $('#imp-delim').value = imp.delim;
+    const keepText = () => { imp.text = $('#imp-text').value; imp.delim = $('#imp-delim').value; };
+    $('#imp-pick').onclick = () => { keepText(); $('#imp-file').click(); };
+    $('#modal-root').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { keepText(); imp.picked.splice(+b.dataset.rm, 1); renderImport(); });
     $('#imp-file').onchange = async e => {
       const fl = [...e.target.files]; if (!fl.length) return;
-      if (fl.length > 1) {
-        try {
-          toast(`파일 ${fl.length}개 읽는 중…`);
-          imp.multi = [];
-          for (const file of fl) {
-            try { const r = await parseFile(file); const sheet = r.sheets.find(s => s.rows.length) || r.sheets[0]; imp.multi.push(Object.assign({ name: file.name.replace(/\.[^.]+$/, ''), rows: sheet.rows, sheets: r.sheets.filter(s => s.rows.length).length }, detectFor(sheet.rows))); }
-            catch (err) { imp.multi.push({ name: file.name, error: err.message, rows: [] }); }
-          }
-          imp.split = true; imp.step = 'multi'; renderImport();
-        } catch (err) { toast('읽기 실패: ' + err.message, 4000); }
-        return;
-      }
-      const f = fl[0];
-      try { toast('파일 읽는 중…'); const r = await parseFile(f); imp.sheets = r.sheets; imp.si = 0; imp.newName = f.name.replace(/\.[^.]+$/, ''); detectCols(); imp.step = 2; renderImport(); }
-      catch (err) { toast('읽기 실패: ' + err.message, 4000); }
+      keepText(); toast(`파일 ${fl.length}개 읽는 중…`);
+      const got = await readPickedFiles(fl);
+      for (const g of got) { const i = imp.picked.findIndex(x => x.name === g.name); if (i >= 0) imp.picked[i] = g; else imp.picked.push(g); }
+      renderImport();
     };
     $('#imp-next').onclick = () => {
-      const t = $('#imp-text').value; imp.delim = $('#imp-delim').value; imp.text = t;
-      const rows = t.split(/\r?\n/).filter(l => l.trim()).map(l => splitLine(l, imp.delim));
+      keepText();
+      const ok = imp.picked.filter(f => !f.error);
+      if (imp.picked.length > 1) { imp.multi = imp.picked; imp.split = true; imp.step = 'multi'; return renderImport(); }
+      if (ok.length === 1) { const f = ok[0]; imp.sheets = f.all.filter(s => s.rows.length).length ? f.all.filter(s => s.rows.length) : f.all; imp.si = 0; imp.newName = f.name; detectCols(); imp.step = 2; return renderImport(); }
+      if (imp.picked.length === 1) return toast('읽기 실패: ' + imp.picked[0].error, 4000);
+      const rows = imp.text.split(/\r?\n/).filter(l => l.trim()).map(l => splitLine(l, imp.delim));
       if (!rows.length) return toast('파일을 선택하거나 텍스트를 입력하세요');
       imp.sheets = [{ name: 'text', rows }]; imp.si = 0; if (!imp.newName) imp.newName = '붙여넣은 카드'; detectCols(); imp.step = 2; renderImport();
     };
@@ -771,7 +779,7 @@ function renderMultiImport() {
     <div class="help">파일 이름이 세트 이름이 됩니다. 같은 폴더에 같은 이름의 세트가 있으면 그 세트에 이어서 추가합니다.</div>
     <div class="foot"><button class="btn" id="imp-back">이전</button><button class="btn primary" id="mi-go" ${ok.length ? '' : 'disabled'}>${ok.length}개 파일 가져오기</button></div>`);
   const fs = $('#mi-folder'); const syncNew = () => $('#mi-newname-wrap').classList.toggle('hidden', fs.value !== '__new__'); fs.onchange = syncNew; syncNew();
-  $('#imp-back').onclick = () => { imp.step = 1; imp.multi = null; renderImport(); };
+  $('#imp-back').onclick = () => { imp.step = 1; imp.multi = null; renderImport(); }; // picked list is kept
   $('#mi-go').onclick = () => {
     imp.skipDup = $('#mi-dup').checked; const split = !!($('#mi-split') && $('#mi-split').checked);
     let target = fs.value; if (target === '__new__') target = createFolder($('#mi-newname').value || '가져온 파일', imp.folderId || null);

@@ -552,7 +552,7 @@ function viewSettings() {
           <button class="btn ghost" data-action="wipe" style="color:var(--no)">전체 삭제</button>
         </div>
         <div class="muted" style="margin-top:8px">폴더 ${liveFolders().length}개 · 세트 ${all.length}개 · 카드 ${nc}장 · 사진 ${ni}장 · 텍스트 ${(JSON.stringify(data).length / 1024).toFixed(0)} KB</div>
-        <div id="install-row" class="row hidden" style="margin-top:10px"><button class="btn primary" data-action="install">📱 홈 화면에 앱 설치</button></div>
+        <div id="install-row" class="row" style="margin-top:10px">${isStandalone() ? '<span class="muted">📱 홈 화면 앱으로 실행 중입니다</span>' : '<button class="btn primary" data-action="install">📱 홈 화면에 앱 설치</button>'}</div>
       </div>
       <div class="muted" style="text-align:center">Amnesia 낱말카드 · 키보드: Space 뒤집기, ←/→ 이동, 1 모름, 2 알았음</div>
     </div>`;
@@ -752,7 +752,16 @@ document.addEventListener('click', async e => {
     case 'backup': download(`amnesia-backup-${new Date().toISOString().slice(0, 10)}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' })); break;
     case 'restore': { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json'; inp.onchange = async () => { try { const j = JSON.parse(await inp.files[0].text()); if (!j.decks) throw new Error('형식 오류'); j.folders ||= {}; j.progress ||= {}; j.images ||= {}; data = mergeData(data, j); saveData(); render(); toast('복원 완료 (기존 데이터와 병합)'); } catch (err) { toast('복원 실패: ' + err.message); } }; inp.click(); break; }
     case 'wipe': confirmModal('전체 삭제', '이 기기의 모든 폴더·세트·카드를 삭제합니다. 드라이브 동기화가 켜져 있으면 삭제도 동기화됩니다.', '모두 삭제', () => { for (const d of Object.values(data.decks)) { d.deleted = true; d.updated = now(); } for (const f of Object.values(data.folders)) { f.deleted = true; f.updated = now(); } sessions = {}; saveSessions(); saveData(); render(); }, true); break;
-    case 'install': if (installPrompt) { installPrompt.prompt(); installPrompt = null; } break;
+    case 'install': {
+      if (installPrompt) { const p = installPrompt; installPrompt = null; p.prompt(); p.userChoice.then(r => { if (r.outcome === 'accepted') toast('설치되었습니다. 홈 화면에서 실행하세요'); else render(); }); break; }
+      const ios = /iPhone|iPad/.test(navigator.userAgent);
+      openModal(`<h3>홈 화면에 설치</h3><div class="help">
+        <p>브라우저가 바로 설치 창을 띄워주지 않을 때는 메뉴에서 직접 추가하면 됩니다.</p>
+        ${ios ? '<p><b>iPhone Safari</b>: 아래 공유 버튼(□↑) → <b>홈 화면에 추가</b></p>' : '<p><b>안드로이드 크롬</b>: 오른쪽 위 메뉴(⋮) → <b>홈 화면에 추가</b> 또는 <b>앱 설치</b></p><p><b>삼성 인터넷</b>: 아래 메뉴(≡) → <b>현재 페이지 추가</b> → <b>홈 화면</b></p>'}
+        <p>이미 설치했다면 메뉴에 "앱 열기"가 보이거나 설치 항목이 사라집니다. 그 경우 홈 화면의 Amnesia 아이콘으로 실행하세요.</p>
+      </div><div class="foot"><button class="btn primary" data-action="close-modal">확인</button></div>`);
+      break;
+    }
   }
 });
 document.addEventListener('change', e => {
@@ -791,12 +800,13 @@ function afterRender(r) {
     flip.addEventListener('touchstart', e => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; t0 = now(); }, { passive: true });
     flip.addEventListener('touchend', e => { const t = e.changedTouches[0]; const dx = t.clientX - sx, dy = t.clientY - sy; if (Math.abs(dx) > 70 && Math.abs(dy) < 60 && now() - t0 < 600) { const b = document.querySelector(`[data-action="${dx < 0 ? 'next' : 'prev'}"]`); if (b && !b.disabled) b.click(); } }, { passive: true });
   }
-  if (r.name === 'settings' && installPrompt) { const row = $('#install-row'); if (row) row.classList.remove('hidden'); }
 }
 
 /* ---------- boot ---------- */
 let installPrompt = null;
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; const row = $('#install-row'); if (row) row.classList.remove('hidden'); });
+function isStandalone() { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; }
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
+window.addEventListener('appinstalled', () => { installPrompt = null; toast('앱이 설치되었습니다'); if (route().name === 'settings') render(); });
 function applyTheme() { if (settings.theme === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', settings.theme); }
 applyTheme();
 render();

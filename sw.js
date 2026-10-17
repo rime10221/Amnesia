@@ -1,4 +1,4 @@
-const VERSION = 'amnesia-v4';
+const VERSION = 'amnesia-v5';
 const SHELL = ['./', './index.html', './app.js', './styles.css', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'];

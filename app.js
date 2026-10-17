@@ -50,12 +50,30 @@ const liveCards = d => Object.values(d.cards).filter(c => !c.deleted).sort((a, b
 const deckById = id => { const d = data.decks[id]; return d && !d.deleted ? d : null; };
 const folderById = id => { const f = data.folders[id]; return f && !f.deleted ? f : null; };
 const folderDecks = fid => liveDecks().filter(d => d.folderId === fid);
+const MAX_DEPTH = 2;
+const effParent = f => (f.parentId && folderById(f.parentId)) ? f.parentId : null;
+const childFolders = pid => liveFolders().filter(f => effParent(f) === (pid || null));
+function folderDepth(id) { let d = 1, f = folderById(id); while (f && effParent(f)) { d++; f = folderById(effParent(f)); } return d; }
+function folderDecksDeep(fid) { return folderDecks(fid).concat(...childFolders(fid).map(c => folderDecksDeep(c.id))); }
+function folderPath(id) { const out = []; let f = folderById(id); while (f) { out.unshift(f); f = effParent(f) ? folderById(effParent(f)) : null; } return out; }
+function folderOptions(selectedId, excludeId = null, maxDepth = MAX_DEPTH) {
+  // <option>s for every folder (indented), honoring the depth limit
+  const rows = [];
+  const walk = (pid, depth, prefix) => { for (const f of childFolders(pid)) { if (f.id === excludeId) continue; if (depth <= maxDepth) rows.push(`<option value="${f.id}" ${selectedId === f.id ? 'selected' : ''}>${prefix}${esc(f.name)}</option>`); if (depth < maxDepth) walk(f.id, depth + 1, prefix + '　└ '); } };
+  walk(null, 1, '📁 '); return rows.join('');
+}
 const rootDecks = () => liveDecks().filter(d => !d.folderId || !folderById(d.folderId));
 function maxPos(d) { let m = 0; for (const c of Object.values(d.cards)) if (!c.deleted && c.pos > m) m = c.pos; return m; }
 
-function createFolder(name) { const id = uid(); const t = now(); data.folders[id] = { id, name: name.trim() || '새 폴더', created: t, updated: t }; saveData(); return id; }
+function createFolder(name, parentId = null) { if (parentId && folderDepth(parentId) >= MAX_DEPTH) parentId = effParent(folderById(parentId)); const id = uid(); const t = now(); data.folders[id] = { id, name: name.trim() || '새 폴더', created: t, updated: t, parentId: parentId || null }; saveData(); return id; }
+function moveFolder(id, parentId) { const f = data.folders[id]; if (!f) return; if (parentId === id) return; f.parentId = parentId || null; f.updated = now(); saveData(); }
 function renameFolder(id, name) { const f = data.folders[id]; if (!f) return; f.name = name.trim() || f.name; f.updated = now(); saveData(); }
-function deleteFolder(id, withDecks) { const f = data.folders[id]; if (!f) return; for (const d of folderDecks(id)) { if (withDecks) { d.deleted = true; } else { d.folderId = null; } d.updated = now(); } f.deleted = true; f.updated = now(); delete sessions['folder:' + id]; saveSessions(); saveData(); }
+function deleteFolder(id, withDecks) {
+  const f = data.folders[id]; if (!f) return;
+  for (const c of childFolders(id)) { if (withDecks) deleteFolder(c.id, true); else { c.parentId = null; c.updated = now(); } }
+  for (const d of folderDecks(id)) { if (withDecks) { d.deleted = true; } else { d.folderId = null; } d.updated = now(); }
+  f.deleted = true; f.updated = now(); delete sessions['folder:' + id]; saveSessions(); saveData();
+}
 function createDeck(name, folderId = null) { const id = uid(); const t = now(); data.decks[id] = { id, name: name.trim() || '새 세트', created: t, updated: t, folderId: folderId || null, cards: {} }; saveData(); return id; }
 function renameDeck(id, name) { const d = data.decks[id]; if (!d) return; d.name = name.trim() || d.name; d.updated = now(); saveData(); }
 function moveDeck(id, folderId) { const d = data.decks[id]; if (!d) return; d.folderId = folderId || null; d.updated = now(); saveData(); }
@@ -96,7 +114,7 @@ function resetProgress(deckIds, keepStars = true) {
 /* scopes: what is being studied (one deck or a whole folder) */
 function getScope(type, id) {
   if (type === 'deck') { const d = deckById(id); return d && { type, id, name: d.name, deckIds: [id] }; }
-  const f = folderById(id); return f && { type, id, name: f.name, deckIds: folderDecks(id).map(d => d.id) };
+  const f = folderById(id); return f && { type, id, name: f.name, deckIds: folderDecksDeep(id).map(d => d.id) };
 }
 function scopeCards(scope, inc) { const out = []; for (const did of scope.deckIds) { if (inc && !inc.includes(did)) continue; const d = deckById(did); for (const c of liveCards(d)) out.push({ d: did, c }); } return out; }
 const skey = s => s.type + ':' + s.id;
@@ -369,12 +387,13 @@ window.addEventListener('hashchange', render);
 function pill() { const st = syncStatus(); return `<button class="pill ${st.cls}" data-sync-pill data-action="sync-pill"><i class="dot"></i>${esc(st.text)}</button>`; }
 function topbar(title, left, right = '') { return `<div class="topbar">${left || ''}<h1>${esc(title)}</h1>${right}</div>`; }
 function barHtml(s) { const ok = s.total ? Math.round(s.ok / s.total * 100) : 0, no = s.total ? Math.round(s.no / s.total * 100) : 0; return `<div class="bar multi"><i style="width:${ok}%"></i><i class="no" style="width:${no}%"></i></div>`; }
+function folderRow(f) { const ids = folderDecksDeep(f.id).map(d => d.id); const s = statsFor(ids); const subs = childFolders(f.id).length; return `<button class="deck folder" data-action="go" data-to="#/folder/${f.id}"><span class="dicon">📁</span><div class="grow"><div class="name">${esc(f.name)}</div><div class="meta">${subs ? `하위 폴더 ${subs}개 · ` : ''}세트 ${ids.length}개 · ${s.total}장 · 알았음 ${s.ok} · 모름 ${s.no}</div>${barHtml(s)}</div><span class="muted">›</span></button>`; }
 function deckRow(d, idx) { const s = statsFor([d.id]); return `<button class="deck" data-action="go" data-to="#/deck/${d.id}"><span class="dicon">${idx != null ? idx + 1 : '🗂'}</span><div class="grow"><div class="name">${esc(d.name)}</div><div class="meta">${s.total}장 · 알았음 ${s.ok} · 모름 ${s.no}${s.star ? ' · ★' + s.star : ''}</div>${barHtml(s)}</div><span class="muted">›</span></button>`; }
 
 /* ---------- view: home ---------- */
 function viewHome() {
-  const folders = liveFolders(), decks = rootDecks();
-  const fl = folders.map(f => { const ids = folderDecks(f.id).map(d => d.id); const s = statsFor(ids); return `<button class="deck folder" data-action="go" data-to="#/folder/${f.id}"><span class="dicon">📁</span><div class="grow"><div class="name">${esc(f.name)}</div><div class="meta">세트 ${ids.length}개 · ${s.total}장 · 알았음 ${s.ok} · 모름 ${s.no}</div>${barHtml(s)}</div><span class="muted">›</span></button>`; }).join('');
+  const folders = childFolders(null), decks = rootDecks();
+  const fl = folders.map(folderRow).join('');
   const dl = decks.map(d => deckRow(d)).join('');
   const empty = !folders.length && !decks.length ? `<div class="empty"><div class="big">📁</div>아직 아무것도 없습니다.<br>오른쪽 아래 + 버튼으로 폴더(단원)를 만들고<br>그 안에 직접 입력하거나 엑셀을 가져오세요.</div>` : '';
   return topbar('Amnesia', '', `${pill()}<button class="iconbtn" data-action="go" data-to="#/settings" title="설정">⚙️</button>`) +
@@ -406,7 +425,7 @@ function studyPanel(scope) {
   if (chunk) { const parts = []; for (let a = 1; a <= total; a += chunk) { const b = Math.min(a + chunk - 1, total); parts.push(`<button class="chip ${o.from === a && o.to === b ? 'on' : ''}" data-action="range" data-from="${a}" data-to="${b}">${a}–${b}</button>`); } chunks = `<div class="row" style="margin-top:8px"><span class="muted">묶음</span><select class="input" style="width:auto;min-height:34px;padding:4px 8px" data-change="chunk">${[20, 30, 50, 100].map(v => `<option ${chunk == v ? 'selected' : ''}>${v}</option>`).join('')}</select><span class="muted">개씩</span></div><div class="chips" style="margin-top:8px">${parts.join('')}</div>`; }
   let incHtml = '';
   if (scope.type === 'folder' && scope.deckIds.length > 1) {
-    incHtml = `<div class="muted" style="margin:10px 0 6px">포함할 세트</div><div class="chips" style="margin-bottom:6px">${scope.deckIds.map(id => { const d = deckById(id); const on = !o.inc || o.inc.includes(id); return `<button class="chip ${on ? 'on' : ''}" data-action="inc" data-id="${id}">${esc(d.name)} (${liveCards(d).length})</button>`; }).join('')}<button class="chip" data-action="inc-all">모두</button></div>`;
+    incHtml = `<div class="muted" style="margin:10px 0 6px">포함할 세트</div><div class="chips" style="margin-bottom:6px">${scope.deckIds.map(id => { const d = deckById(id); const on = !o.inc || o.inc.includes(id); const sub = scope.type === 'folder' && d.folderId !== scope.id && folderById(d.folderId) ? esc(folderById(d.folderId).name) + ' › ' : ''; return `<button class="chip ${on ? 'on' : ''}" data-action="inc" data-id="${id}">${sub}${esc(d.name)} (${liveCards(d).length})</button>`; }).join('')}<button class="chip" data-action="inc-all">모두</button></div>`;
   }
   const cnt = f => countForOpts(scope, Object.assign({}, o, { filter: f }));
   return `<div class="card-box">
@@ -450,11 +469,17 @@ let formImgs = { fi: null, bi: null };
 /* ---------- view: folder ---------- */
 function viewFolder(id) {
   const f = folderById(id); if (!f) return viewHome();
-  const scope = getScope('folder', id); const decks = folderDecks(id);
-  return topbar(f.name, `<button class="iconbtn" data-action="go" data-to="#/">‹</button>`, `${pill()}<button class="iconbtn" data-action="folder-menu" title="폴더 메뉴">⋮</button>`) +
-    `<div class="page"><div class="${decks.length ? 'cols' : ''}">
-      ${decks.length ? `<div class="col-a">${studyPanel(scope)}</div>` : ''}
+  const scope = getScope('folder', id); const decks = folderDecks(id); const subs = childFolders(id); const depth = folderDepth(id); const parent = effParent(f);
+  const crumbs = folderPath(id).slice(0, -1).map(x => `<a href="#/folder/${x.id}">📁 ${esc(x.name)}</a>`).join(' › ');
+  const hasStudy = scope.deckIds.length > 0;
+  return topbar(f.name, `<button class="iconbtn" data-action="go" data-to="${parent ? '#/folder/' + parent : '#/'}">‹</button>`, `${pill()}<button class="iconbtn" data-action="folder-menu" title="폴더 메뉴">⋮</button>`) +
+    `<div class="page">${crumbs ? `<div class="muted" style="margin-bottom:8px">${crumbs}</div>` : ''}<div class="${hasStudy ? 'cols' : ''}">
+      ${hasStudy ? `<div class="col-a">${studyPanel(scope)}</div>` : ''}
       <div class="col-b">
+      ${depth < MAX_DEPTH || subs.length ? `<div class="card-box">
+        <div class="row" style="margin-bottom:8px"><h2 style="margin:0" class="grow">하위 폴더 (${subs.length})</h2>${depth < MAX_DEPTH ? `<button class="btn sm" data-action="new-subfolder" data-folder="${id}">+ 하위 폴더</button>` : ''}</div>
+        ${subs.map(folderRow).join('') || '<div class="muted">하위 폴더가 없습니다. 예: "산과" 폴더 안에 "산전진찰", "분만" 같은 단원 폴더를 만들 수 있습니다.</div>'}
+      </div>` : ''}
       <div class="card-box">
         <div class="row" style="margin-bottom:8px"><h2 style="margin:0" class="grow">세트 (${decks.length})</h2><button class="btn sm" data-action="new-deck" data-folder="${id}">+ 빈 세트</button><button class="btn sm" data-action="import" data-folder="${id}">📥 파일 가져오기</button></div>
         ${decks.map((d, i) => deckRow(d, i)).join('') || '<div class="muted">세트가 없습니다. 아래에서 카드를 직접 추가하거나 엑셀 파일을 가져오면 세트가 만들어집니다.</div>'}
@@ -664,14 +689,14 @@ function renderImport() {
   const colOpts = sel => Array.from({ length: ncol }, (_, i) => `<option value="${i}" ${sel === i ? 'selected' : ''}>${String.fromCharCode(65 + (i % 26))}열${imp.header && rows[0][i] ? ' (' + esc(String(rows[0][i]).slice(0, 12)) + ')' : ''}</option>`).join('');
   const prev = rows.slice(0, 6).map(r => `<tr>${Array.from({ length: ncol }, (_, i) => `<td style="${i === imp.colF ? 'background:rgba(79,109,245,.15)' : i === imp.colB ? 'background:rgba(22,163,74,.12)' : i === imp.colD ? 'background:rgba(245,158,11,.15)' : ''}">${esc(String(r[i] ?? '').slice(0, 40))}</td>`).join('')}</tr>`).join('');
   const folders = liveFolders(); const decks = liveDecks(); const deckNames = imp.colD >= 0 ? new Set(body.map(r => String(r[imp.colD] ?? '').trim()).filter(Boolean)) : null;
-  const folderOpts = `<option value="">(폴더 없음 · 최상위)</option>${folders.map(f => `<option value="${f.id}" ${imp.folderId === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}`;
+  const folderOpts = `<option value="">(폴더 없음 · 최상위)</option>${folderOptions(imp.folderId)}`;
   openModal(`<h3>열 선택 · ${body.length}개 행</h3>
     ${imp.sheets.length > 1 ? `<label class="field"><span>시트</span><select class="input" id="imp-sheet">${imp.sheets.map((s, i) => `<option value="${i}" ${i === imp.si ? 'selected' : ''}>${esc(s.name)} (${s.rows.length})</option>`).join('')}</select></label>` : ''}
     <div class="scrollx" style="margin-bottom:10px"><table class="preview"><thead><tr>${Array.from({ length: ncol }, (_, i) => `<th>${String.fromCharCode(65 + (i % 26))}</th>`).join('')}</tr></thead><tbody>${prev}</tbody></table></div>
     <label class="switch"><span>첫 행은 제목 (건너뛰기)</span><input type="checkbox" id="imp-header" ${imp.header ? 'checked' : ''}></label>
     <div class="row"><label class="field grow"><span>앞면 열</span><select class="input" id="imp-f">${colOpts(imp.colF)}</select></label><label class="field grow"><span>뒷면 열</span><select class="input" id="imp-b">${colOpts(imp.colB)}</select></label></div>
     <label class="field"><span>세트 나누기 열 (선택: 이 열의 값마다 세트가 생깁니다, 예: 과목)</span><select class="input" id="imp-d"><option value="-1">사용 안 함</option>${colOpts(imp.colD)}</select></label>
-    ${imp.colD >= 0 ? `<div class="muted" style="margin-bottom:8px">→ ${deckNames.size}개 세트: ${esc([...deckNames].slice(0, 8).join(', '))}${deckNames.size > 8 ? ' …' : ''}</div><label class="field"><span>세트들을 넣을 폴더</span><select class="input" id="imp-folder"><option value="__new__">새 폴더 "${esc(imp.newName)}"</option>${folderOpts}</select></label>` : `
+    ${imp.colD >= 0 ? `<div class="muted" style="margin-bottom:8px">→ ${deckNames.size}개 세트: ${esc([...deckNames].slice(0, 8).join(', '))}${deckNames.size > 8 ? ' …' : ''}</div><label class="field"><span>세트들을 넣을 폴더</span><select class="input" id="imp-folder"><option value="__new__">새 폴더 "${esc(imp.newName)}"${imp.folderId && folderById(imp.folderId) ? ' (📁 ' + esc(folderById(imp.folderId).name) + ' 안에)' : ''}</option>${folderOpts}</select></label>` : `
     <label class="field"><span>저장할 세트</span><select class="input" id="imp-target"><option value="new" ${imp.target === 'new' ? 'selected' : ''}>새 세트 만들기</option>${decks.map(d => `<option value="${d.id}" ${imp.target === d.id ? 'selected' : ''}>${esc(d.name)}${d.folderId && folderById(d.folderId) ? ' (📁 ' + esc(folderById(d.folderId).name) + ')' : ''} · ${liveCards(d).length}장</option>`).join('')}</select></label>
     ${imp.target === 'new' ? `<label class="field"><span>새 세트 이름</span><input class="input" id="imp-name" value="${esc(imp.newName)}"></label><label class="field"><span>폴더</span><select class="input" id="imp-folder">${folderOpts}</select></label>` : ''}`}
     <label class="switch"><span>앞면이 같은 카드는 건너뛰기</span><input type="checkbox" id="imp-dup" ${imp.skipDup ? 'checked' : ''}></label>
@@ -687,7 +712,7 @@ function renderImport() {
     let total = 0, created = 0, dest = null;
     const fsel = $('#imp-folder') ? $('#imp-folder').value : (imp.folderId || '');
     if (imp.colD >= 0) {
-      const fid = fsel === '__new__' ? createFolder(imp.newName || '가져온 폴더') : (fsel || null);
+      const fid = fsel === '__new__' ? createFolder(imp.newName || '가져온 폴더', imp.folderId || null) : (fsel || null);
       const groups = new Map(); for (const p of pairs) { const k = p[2] || '(미분류)'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push([p[0], p[1]]); }
       for (const [name, ps] of groups) { let d = liveDecks().find(x => x.name === name && (x.folderId || null) === fid); const id = d ? d.id : (created++, createDeck(name, fid)); total += addCards(id, ps, imp.skipDup); }
       dest = fid ? '#/folder/' + fid : '#/';
@@ -723,8 +748,16 @@ function openMenu(items) {
 }
 function curScope() { const r = route(); if (r.name === 'study') return getScope(r.a, r.b); if (r.name === 'deck') return getScope('deck', r.a); if (r.name === 'folder') return getScope('folder', r.a); return null; }
 function moveDeckModal(deckId) {
-  const d = deckById(deckId); const opts = [{ label: '(폴더 없음 · 최상위)', id: '' }].concat(liveFolders().filter(f => f.id !== d.folderId).map(f => ({ label: '📁 ' + esc(f.name), id: f.id })));
+  const d = deckById(deckId); const opts = [{ label: '(폴더 없음 · 최상위)', id: '' }];
+  const walk = (pid, prefix) => { for (const f of childFolders(pid)) { opts.push({ label: prefix + '📁 ' + esc(f.name) + (f.id === d.folderId ? ' (현재 위치)' : ''), id: f.id }); if (folderDepth(f.id) < MAX_DEPTH) walk(f.id, prefix + '　└ '); } };
+  walk(null, '');
   chooseModal('세트를 옮길 폴더', opts, o => { moveDeck(deckId, o.id || null); render(); toast('이동했습니다'); });
+}
+function moveFolderModal(folderId) {
+  const f = folderById(folderId); const hasKids = childFolders(folderId).length > 0;
+  const opts = [{ label: '(최상위)', id: '' }];
+  if (!hasKids) for (const t of childFolders(null)) if (t.id !== folderId) opts.push({ label: '📁 ' + esc(t.name) + ' 안으로', id: t.id });
+  chooseModal(hasKids ? '하위 폴더가 있는 폴더는 최상위에만 둘 수 있습니다' : '폴더를 옮길 위치', opts, o => { moveFolder(folderId, o.id || null); render(); toast('이동했습니다'); });
 }
 
 document.addEventListener('click', async e => {
@@ -734,6 +767,7 @@ document.addEventListener('click', async e => {
     case 'go': listLimit = 200; deckSearch = ''; go(el.dataset.to); break;
     case 'fab': chooseModal('추가', [{ label: '📁 새 폴더 (단원)', id: 'folder' }, { label: '🗂 새 세트', id: 'deck' }, { label: '📥 엑셀/텍스트 가져오기', id: 'import' }], o => { if (o.id === 'folder') promptModal('새 폴더 이름', '', '만들기', v => { const id = createFolder(v); go('#/folder/' + id); }, '예: 산과'); else if (o.id === 'deck') promptModal('새 세트 이름', '', '만들기', v => { const id = createDeck(v); go('#/deck/' + id); }); else importModal(null, null); }); break;
     case 'new-deck': promptModal('새 세트 이름', '', '만들기', v => { const id = createDeck(v, el.dataset.folder || null); go('#/deck/' + id); }); break;
+    case 'new-subfolder': promptModal('하위 폴더 이름', '', '만들기', v => { const id = createFolder(v, el.dataset.folder); go('#/folder/' + id); }, '예: 산전진찰'); break;
     case 'import': importModal(el.dataset.deck || null, el.dataset.folder || null); break;
     case 'sync-pill': if (!settings.clientId) go('#/settings'); else if (!settings.signedIn || sync.needLogin) signIn(); else runSync(true); break;
     case 'sign-in': signIn(); break;
@@ -766,9 +800,10 @@ document.addEventListener('click', async e => {
     ]); break; }
     case 'folder-menu': { e.stopPropagation(); const f = folderById(scope.id); openMenu([
       { id: 'rename', label: '✏️ 이름 바꾸기', run: () => promptModal('폴더 이름', f.name, '저장', v => { renameFolder(f.id, v); render(); }) },
+      { id: 'move', label: '📁 다른 폴더로 이동', run: () => moveFolderModal(f.id) },
       { id: 'export', label: '📤 엑셀로 내보내기 (세트별 시트)', run: () => exportXlsx(f.name, scope.deckIds).catch(err => toast(err.message)) },
       { id: 'reset', label: '⟲ 이 폴더 학습 기록 초기화', run: () => confirmModal('학습 기록 초기화', `"${esc(f.name)}" 폴더의 모든 세트에서 알았음/모름 표시를 지웁니다. 별표는 유지됩니다.`, '초기화', () => { resetProgress(scope.deckIds); render(); toast('초기화했습니다'); }) },
-      { id: 'delete', label: '🗑 폴더 삭제', danger: true, run: () => confirmModal('폴더 삭제', `"${esc(f.name)}" 폴더를 삭제합니다. 안의 세트 ${scope.deckIds.length}개를 함께 지울지, 최상위로 옮겨 남길지 선택하세요.`, '세트까지 삭제', () => { deleteFolder(f.id, true); go('#/'); }, true, { text: '세트는 남기기', run: () => { deleteFolder(f.id, false); go('#/'); } }) },
+      { id: 'delete', label: '🗑 폴더 삭제', danger: true, run: () => confirmModal('폴더 삭제', `"${esc(f.name)}" 폴더를 삭제합니다. 안의 ${childFolders(f.id).length ? `하위 폴더 ${childFolders(f.id).length}개와 ` : ''}세트 ${scope.deckIds.length}개를 함께 지울지, 최상위로 옮겨 남길지 선택하세요.`, '모두 삭제', () => { const back = effParent(f) ? '#/folder/' + effParent(f) : '#/'; deleteFolder(f.id, true); go(back); }, true, { text: '내용은 남기기', run: () => { const back = effParent(f) ? '#/folder/' + effParent(f) : '#/'; deleteFolder(f.id, false); go(back); } }) },
     ]); break; }
     case 'deck-menu': { e.stopPropagation(); const d = deckById(scope.id); openMenu([
       { id: 'rename', label: '✏️ 이름 바꾸기', run: () => promptModal('세트 이름', d.name, '저장', v => { renameDeck(d.id, v); render(); }) },

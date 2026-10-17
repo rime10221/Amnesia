@@ -149,9 +149,9 @@ code{background:var(--surface2);padding:1px 5px;border-radius:5px;font-size:12px
 .face.hasimg .content{flex:0 0 auto}
 
 /* tablets & landscape */
-@media (min-width: 900px){
+@media (min-width: 800px), (orientation: landscape) and (min-width: 680px){
   .page{max-width:1180px;padding:20px 28px 100px}
-  .cols{display:grid;grid-template-columns:minmax(360px,5fr) minmax(0,7fr);gap:16px;align-items:start}
+  .cols{display:grid;grid-template-columns:minmax(300px,5fr) minmax(0,7fr);gap:16px;align-items:start}
   .cols .col-a{position:sticky;top:76px}
   .study .stage,.study .actions{max-width:1000px}
   .study .stage{padding:16px 28px 0}

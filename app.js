@@ -34,7 +34,7 @@ data.folders ||= {}; data.progress ||= {}; data.images ||= {};
 const DEFAULT_CLIENT_ID = '83549191023-4v8ggp4pbt9q8oen511nk0cvv2jo9c4a.apps.googleusercontent.com'; // GCP project amnesia-511913 (public identifier)
 let settings = Object.assign({
   clientId: DEFAULT_CLIENT_ID, autoSync: true, theme: 'auto', flipAnim: true, swipe: true, showHint: true,
-  signedIn: false, sync: { folderId: null, imgFolderId: null, fileId: null, lastSync: null, email: null }
+  signedIn: false, token: null, sync: { folderId: null, imgFolderId: null, fileId: null, lastSync: null, email: null }
 }, lsLoad(LS.set, {}));
 settings.sync.imgFolderId ??= null;
 let sessions = lsLoad(LS.sess, {});
@@ -182,7 +182,7 @@ async function uploadPendingImages() {
 const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email';
 const DRIVE = 'https://www.googleapis.com/drive/v3', UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const FOLDER = 'Amnesia', FILE = 'amnesia-decks.json';
-const sync = { token: null, exp: 0, client: null, status: 'idle', msg: '', busy: false, timer: null, pending: false };
+const sync = { status: 'idle', msg: '', busy: false, timer: null, pending: false, needLogin: false, justLoggedIn: false };
 
 function syncStatus() {
   if (!settings.clientId) return { cls: '', text: '동기화 꺼짐' };
@@ -192,43 +192,72 @@ function syncStatus() {
   return { cls: 'ok', text: settings.sync.lastSync ? '동기화 ' + fmtTime(settings.sync.lastSync) : '로그인됨' };
 }
 function setStatus(s, msg = '') { sync.status = s; sync.msg = msg; document.querySelectorAll('[data-sync-pill]').forEach(el => { const st = syncStatus(); el.className = 'pill ' + st.cls; el.innerHTML = `<i class="dot"></i>${esc(st.text)}`; }); const d = $('#sync-detail'); if (d) d.textContent = msg || (settings.sync.email ? settings.sync.email : ''); }
-async function ensureGis() {
+/* --- OAuth: redirect/iframe implicit flow (no popups, token kept in localStorage until 로그아웃) --- */
+const AUTH_EP = 'https://accounts.google.com/o/oauth2/v2/auth';
+const REDIRECT_URI = location.origin + location.pathname;
+function authUrl(opts = {}) {
   if (!settings.clientId) throw new Error('설정에서 Google 클라이언트 ID를 먼저 입력하세요');
-  await loadScript('https://accounts.google.com/gsi/client');
-  if (!sync.client) sync.client = google.accounts.oauth2.initTokenClient({ client_id: settings.clientId, scope: SCOPES, callback: () => { } });
+  const p = new URLSearchParams({ client_id: settings.clientId, redirect_uri: REDIRECT_URI, response_type: 'token', scope: SCOPES, include_granted_scopes: 'true', state: JSON.stringify(Object.assign({ r: location.hash || '#/' }, opts.state || {})) });
+  if (settings.sync.email) p.set('login_hint', settings.sync.email);
+  p.set('prompt', opts.silent ? 'none' : (settings.sync.email ? '' : 'select_account'));
+  return AUTH_EP + '?' + p.toString();
 }
-function getToken(interactive) {
-  return new Promise(async (res, rej) => {
-    try { await ensureGis(); } catch (e) { return rej(e); }
-    if (sync.token && now() < sync.exp) return res(sync.token);
-    sync.client.callback = r => { if (r.error) return rej(new Error(r.error_description || r.error)); sync.token = r.access_token; sync.exp = now() + (r.expires_in - 90) * 1000; res(sync.token); };
-    sync.client.error_callback = e => rej(new Error(e.type === 'popup_closed' ? '로그인 창이 닫혔습니다' : e.type === 'popup_failed_to_open' ? '팝업이 차단되어 로그인할 수 없습니다' : (e.message || e.type)));
-    // hint = previously used account: skips the account chooser so the silent refresh popup closes by itself
-    const hint = settings.sync.email ? { hint: settings.sync.email } : {};
-    sync.client.requestAccessToken(Object.assign(interactive ? { prompt: settings.sync.email ? '' : 'select_account' } : { prompt: '' }, hint));
+function tokenValid() { return settings.token && settings.token.v && now() < settings.token.exp; }
+function storeToken(v, expiresIn) { settings.token = { v, exp: now() + (Math.max(60, (parseInt(expiresIn, 10) || 3600)) - 90) * 1000 }; settings.signedIn = true; saveSettings(); }
+/* called at boot: consume #access_token=... returned by Google (top window or hidden iframe) */
+function handleAuthReturn() {
+  const h = location.hash; if (!/(^|[#&])(access_token|error)=/.test(h)) return null;
+  const p = new URLSearchParams(h.replace(/^#/, '')); let st = {}; try { st = JSON.parse(p.get('state') || '{}'); } catch (e) { }
+  const result = p.get('access_token') ? { ok: true, token: p.get('access_token'), expiresIn: p.get('expires_in') } : { ok: false, error: p.get('error') || 'unknown' };
+  if (st.iframe && window.parent !== window) { window.parent.postMessage(Object.assign({ amnesiaAuth: true, state: st.iframe }, result), location.origin); return { iframe: true }; }
+  history.replaceState(null, '', location.pathname + (st.r && st.r.startsWith('#') ? st.r : '#/'));
+  if (result.ok) { storeToken(result.token, result.expiresIn); sync.justLoggedIn = true; }
+  else { sync.needLogin = true; sync.status = 'error'; sync.msg = result.error === 'interaction_required' || result.error === 'login_required' || result.error === 'consent_required' ? '다시 로그인이 필요합니다' : '로그인 실패: ' + result.error; }
+  return result;
+}
+function silentIframe() {
+  return new Promise(res => {
+    const st = uid(); const f = document.createElement('iframe'); f.style.display = 'none'; f.setAttribute('aria-hidden', 'true');
+    const done = v => { clearTimeout(to); window.removeEventListener('message', onMsg); f.remove(); res(v); };
+    const to = setTimeout(() => done(null), 8000);
+    const onMsg = e => { if (e.origin !== location.origin || !e.data || !e.data.amnesiaAuth || e.data.state !== st) return; done(e.data); };
+    window.addEventListener('message', onMsg);
+    try { f.src = authUrl({ silent: true, state: { iframe: st } }); } catch (e) { return done(null); }
+    document.body.appendChild(f);
   });
+}
+let silentInFlight = null;
+async function getToken(interactive) {
+  if (tokenValid()) return settings.token.v;
+  if (interactive) { saveSettings(); location.href = authUrl({ silent: false }); return new Promise(() => { }); }
+  if (!silentInFlight) silentInFlight = silentIframe().finally(() => { silentInFlight = null; });
+  const r = await silentInFlight;
+  if (r && r.ok) { storeToken(r.token, r.expiresIn); sync.needLogin = false; return settings.token.v; }
+  throw new Error(r && r.error ? 'login_required: ' + r.error : 'login_required');
 }
 async function gfetch(url, opt = {}, interactive = false) {
   const tok = await getToken(interactive);
   const r = await fetch(url, Object.assign({}, opt, { headers: Object.assign({ Authorization: 'Bearer ' + tok }, opt.headers || {}) }));
-  if (r.status === 401) { sync.token = null; throw new Error('인증이 만료되었습니다. 다시 로그인하세요'); }
+  if (r.status === 401) { settings.token = null; saveSettings(); throw new Error('인증이 만료되었습니다. 다시 로그인하세요'); }
   if (!r.ok) { let t = ''; try { t = (await r.json()).error.message; } catch (e) { t = r.statusText; } throw new Error('Drive 오류: ' + t); }
   return r;
 }
 async function signIn() {
   setStatus('busy', '로그인 중…');
+  try { await getToken(true); } catch (e) { setStatus('error', e.message); toast(e.message, 4000); render(); }
+}
+async function afterLogin() {
   try {
-    await getToken(true);
     const me = await (await gfetch('https://www.googleapis.com/oauth2/v3/userinfo')).json();
-    settings.signedIn = true; settings.sync.email = me.email || null; saveSettings();
-    setStatus('idle'); toast('로그인됨: ' + (me.email || ''));
+    settings.sync.email = me.email || settings.sync.email || null; saveSettings();
+    setStatus('idle'); toast('로그인됨: ' + (settings.sync.email || '')); render();
     await runSync(true);
   } catch (e) { setStatus('error', e.message); toast(e.message, 4000); }
-  render();
 }
 function signOut() {
-  if (sync.token && window.google) try { google.accounts.oauth2.revoke(sync.token, () => { }); } catch (e) { }
-  sync.token = null; sync.exp = 0; settings.signedIn = false; settings.sync = { folderId: null, imgFolderId: null, fileId: null, lastSync: null, email: null }; saveSettings(); setStatus('idle'); render();
+  const t = settings.token && settings.token.v;
+  if (t) fetch('https://oauth2.googleapis.com/revoke?token=' + encodeURIComponent(t), { method: 'POST' }).catch(() => { });
+  settings.token = null; settings.signedIn = false; sync.needLogin = false; settings.sync = { folderId: null, imgFolderId: null, fileId: null, lastSync: null, email: null }; saveSettings(); setStatus('idle'); render();
 }
 async function driveFolder() {
   if (settings.sync.folderId) { try { const r = await gfetch(`${DRIVE}/files/${settings.sync.folderId}?fields=id,trashed`); const j = await r.json(); if (!j.trashed) return j.id; } catch (e) { } settings.sync.folderId = null; settings.sync.imgFolderId = null; }
@@ -273,7 +302,7 @@ async function runSync(interactive = false) {
     sync.needLogin = false;
   } catch (e) {
     console.warn(e);
-    if (/만료|닫혔|팝업|access_denied|interaction_required|login_required/.test(e.message)) sync.needLogin = true;
+    if (/만료|login_required|access_denied|interaction_required|consent_required/.test(e.message)) sync.needLogin = true;
     setStatus('error', e.message); if (interactive) toast(e.message, 4000);
   } finally {
     sync.busy = false;
@@ -528,7 +557,7 @@ function viewSettings() {
     `<div class="page">
       <div class="card-box">
         <h2>구글 드라이브 동기화</h2>
-        <div class="row" style="margin-bottom:10px"><span class="pill ${st.cls}" data-sync-pill><i class="dot"></i>${esc(st.text)}</span><span class="muted" id="sync-detail">${esc(sync.msg || settings.sync.email || '')}</span></div>
+        <div class="row" style="margin-bottom:10px">${pill()}<span class="muted" id="sync-detail">${esc(sync.msg || settings.sync.email || '')}</span></div>
         <div class="row" style="margin-bottom:10px">
           ${settings.signedIn ? `<button class="btn" data-action="sync-now">지금 동기화</button><button class="btn ghost" data-action="sign-out">로그아웃</button>` : `<button class="btn primary" data-action="sign-in" ${settings.clientId ? '' : 'disabled'}>Google 로그인</button>`}
           <button class="btn ghost sm" data-action="toggle-help">${showHelp ? '고급 설정 닫기' : '고급 설정'}</button>
@@ -709,7 +738,7 @@ document.addEventListener('click', async e => {
     case 'sync-pill': if (!settings.clientId) go('#/settings'); else if (!settings.signedIn || sync.needLogin) signIn(); else runSync(true); break;
     case 'sign-in': signIn(); break;
     case 'sign-out': signOut(); break;
-    case 'sync-now': runSync(true); break;
+    case 'sync-now': if (sync.needLogin || !tokenValid()) signIn(); else runSync(true); break;
     case 'toggle-help': showHelp = !showHelp; render(); break;
     case 'close-modal': closeModal(); break;
     case 'close-modal-bg': if (e.target === el) closeModal(); break;
@@ -779,7 +808,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('input', e => {
   const el = e.target.closest('[data-input]'); if (!el) return;
-  if (el.dataset.input === 'clientId') { settings.clientId = el.value.trim(); sync.client = null; saveSettings(); const b = document.querySelector('[data-action="sign-in"]'); if (b) b.disabled = !settings.clientId; setStatus('idle'); }
+  if (el.dataset.input === 'clientId') { settings.clientId = el.value.trim(); saveSettings(); const b = document.querySelector('[data-action="sign-in"]'); if (b) b.disabled = !settings.clientId; setStatus('idle'); }
   if (el.dataset.input === 'search') { deckSearch = el.value; clearTimeout(window._st); window._st = setTimeout(() => { const pos = el.selectionStart; render(); const n = document.querySelector('[data-input="search"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 200); }
 });
 document.addEventListener('submit', e => {
@@ -813,8 +842,24 @@ function isStandalone() { return matchMedia('(display-mode: standalone)').matche
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
 window.addEventListener('appinstalled', () => { installPrompt = null; toast('앱이 설치되었습니다'); if (route().name === 'settings') render(); });
 function applyTheme() { if (settings.theme === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', settings.theme); }
-applyTheme();
-render();
-if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('./sw.js').catch(() => { });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && settings.autoSync) runSync(false); });
-if (settings.clientId && settings.signedIn && settings.autoSync) setTimeout(() => runSync(false), 800);
+const authRet = handleAuthReturn();
+if (!(authRet && authRet.iframe)) {
+  applyTheme();
+  render();
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('./sw.js').catch(() => { });
+  try { if (isStandalone() && screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) { }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && settings.autoSync) runSync(false); });
+  if (authRet && authRet.ok) afterLogin();
+  else if (settings.clientId && settings.signedIn) {
+    // keep the session alive without any popup: hidden-iframe refresh first, one silent redirect as fallback
+    setTimeout(async () => {
+      if (tokenValid()) { if (settings.autoSync) runSync(false); return; }
+      try { await getToken(false); if (settings.autoSync) runSync(false); }
+      catch (e) {
+        const k = 'amnesia.silentRedirect'; const last = +sessionStorage.getItem(k) || 0;
+        if (now() - last > 60000) { sessionStorage.setItem(k, String(now())); location.href = authUrl({ silent: true }); }
+        else { sync.needLogin = true; setStatus('error', '다시 로그인이 필요합니다'); }
+      }
+    }, 300);
+  }
+}

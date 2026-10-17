@@ -147,3 +147,27 @@ code{background:var(--surface2);padding:1px 5px;border-radius:5px;font-size:12px
 .imgwrap.big{width:100%;flex:0 1 auto;max-height:55%;display:flex;align-items:center;justify-content:center;margin-bottom:12px;min-height:60px}
 .imgwrap.big img{max-width:100%;max-height:100%;object-fit:contain;border-radius:12px;cursor:zoom-in}
 .face.hasimg .content{flex:0 0 auto}
+
+/* tablets & landscape */
+@media (min-width: 900px){
+  .page{max-width:1180px;padding:20px 28px 100px}
+  .cols{display:grid;grid-template-columns:minmax(360px,5fr) minmax(0,7fr);gap:16px;align-items:start}
+  .cols .col-a{position:sticky;top:76px}
+  .study .stage,.study .actions{max-width:1000px}
+  .study .stage{padding:16px 28px 0}
+  .fs-xl{font-size:2.6rem}.fs-l{font-size:1.9rem}.fs-m{font-size:1.45rem}.fs-s{font-size:1.15rem}
+  .face{padding:40px 48px}
+  .study .actions .btn{min-height:58px;font-size:18px}
+  .study .actions .btn.nav{flex:0 0 80px}
+  .modal{max-width:760px}
+}
+@media (min-width: 1200px){
+  .fs-xl{font-size:3rem}.fs-l{font-size:2.1rem}.fs-m{font-size:1.6rem}
+}
+@media (max-height: 520px) and (orientation: landscape){
+  .flip{min-height:0}
+  .face{padding:16px 24px}
+  .study .actions{padding-top:6px}
+  .study .actions .btn{min-height:44px}
+  .topbar{min-height:48px;padding:6px 12px}
+}

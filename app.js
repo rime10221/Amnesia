@@ -423,14 +423,16 @@ function viewFolder(id) {
   const f = folderById(id); if (!f) return viewHome();
   const scope = getScope('folder', id); const decks = folderDecks(id);
   return topbar(f.name, `<button class="iconbtn" data-action="go" data-to="#/">‹</button>`, `${pill()}<button class="iconbtn" data-action="folder-menu" title="폴더 메뉴">⋮</button>`) +
-    `<div class="page">
-      ${decks.length ? studyPanel(scope) : ''}
+    `<div class="page"><div class="${decks.length ? 'cols' : ''}">
+      ${decks.length ? `<div class="col-a">${studyPanel(scope)}</div>` : ''}
+      <div class="col-b">
       <div class="card-box">
         <div class="row" style="margin-bottom:8px"><h2 style="margin:0" class="grow">세트 (${decks.length})</h2><button class="btn sm" data-action="new-deck" data-folder="${id}">+ 빈 세트</button><button class="btn sm" data-action="import" data-folder="${id}">📥 파일 가져오기</button></div>
         ${decks.map((d, i) => deckRow(d, i)).join('') || '<div class="muted">세트가 없습니다. 아래에서 카드를 직접 추가하거나 엑셀 파일을 가져오면 세트가 만들어집니다.</div>'}
       </div>
       ${addCardBox(null, id)}
-    </div>`;
+      </div>
+    </div></div>`;
 }
 
 /* ---------- view: deck ---------- */
@@ -448,13 +450,16 @@ function viewDeck(id) {
   return topbar(d.name, `<button class="iconbtn" data-action="go" data-to="${f ? '#/folder/' + f.id : '#/'}">‹</button>`, `${pill()}<button class="iconbtn" data-action="deck-menu" title="세트 메뉴">⋮</button>`) +
     `<div class="page">
       ${f ? `<div class="muted" style="margin-bottom:8px">📁 ${esc(f.name)}</div>` : ''}
-      ${studyPanel(scope)}
+      <div class="cols">
+      <div class="col-a">${studyPanel(scope)}</div>
+      <div class="col-b">
       ${addCardBox(id, null)}
       <div class="card-box">
         <div class="row" style="margin-bottom:8px"><h2 style="margin:0" class="grow">카드 목록 (${cards.length})</h2><input class="input" style="width:50%;min-height:38px" placeholder="검색" value="${esc(deckSearch)}" data-input="search"></div>
         ${rows || '<div class="muted">카드가 없습니다.</div>'}
         ${shown.length > listLimit ? `<div class="row" style="padding-top:10px;justify-content:center"><button class="btn sm" data-action="more">더 보기 (${shown.length - listLimit}장 남음)</button><button class="btn sm ghost" data-action="more-all">전부 펼치기</button></div>` : ''}
       </div>
+      </div></div>
     </div>`;
 }
 

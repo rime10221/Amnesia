@@ -665,14 +665,28 @@ function renderImport() {
   if (imp.step === 1) {
     openModal(`<h3>카드 가져오기</h3>
       <div class="help" style="margin-bottom:10px">엑셀(.xlsx) / CSV / 텍스트 파일을 선택하세요. 안드로이드에서는 파일 선택 창에서 <b>Google 드라이브</b>의 파일도 바로 고를 수 있습니다.</div>
-      <input type="file" id="imp-file" accept=".xlsx,.xls,.xlsm,.csv,.txt,.tsv" class="input" style="padding:8px">
+      <input type="file" id="imp-file" accept=".xlsx,.xls,.xlsm,.csv,.txt,.tsv" class="input" style="padding:8px" multiple>
+      <div class="muted" style="margin-top:4px">여러 파일을 한꺼번에 선택할 수 있습니다 (파일마다 세트 1개).</div>
       <div class="muted" style="margin:14px 0 6px">또는 직접 붙여넣기 (한 줄에 한 카드: <code>단어[Tab]뜻</code>, <code>단어 : 뜻</code>, <code>단어 - 뜻</code>)</div>
       <textarea class="input" id="imp-text" rows="6" placeholder="자궁내막염(endometritis) : clindamycin + gentamicin&#10;유방염(mastitis) : dicloxacillin">${esc(imp.text)}</textarea>
       <div class="row" style="margin-top:8px"><span class="muted">구분자</span><select class="input" id="imp-delim" style="width:auto;min-height:36px;padding:4px 8px"><option value="auto">자동</option><option value="tab">탭</option><option value="colon">콜론 :</option><option value="dash">하이픈 -</option><option value="comma">쉼표 ,</option></select></div>
       <div class="foot"><button class="btn" data-action="close-modal">취소</button><button class="btn primary" id="imp-next">다음</button></div>`);
     $('#imp-delim').value = imp.delim;
     $('#imp-file').onchange = async e => {
-      const f = e.target.files[0]; if (!f) return;
+      const fl = [...e.target.files]; if (!fl.length) return;
+      if (fl.length > 1) {
+        try {
+          toast(`파일 ${fl.length}개 읽는 중…`);
+          imp.multi = [];
+          for (const file of fl) {
+            try { const r = await parseFile(file); const sheet = r.sheets.find(s => s.rows.length) || r.sheets[0]; imp.multi.push(Object.assign({ name: file.name.replace(/\.[^.]+$/, ''), rows: sheet.rows, sheets: r.sheets.filter(s => s.rows.length).length }, detectFor(sheet.rows))); }
+            catch (err) { imp.multi.push({ name: file.name, error: err.message, rows: [] }); }
+          }
+          imp.split = true; imp.step = 'multi'; renderImport();
+        } catch (err) { toast('읽기 실패: ' + err.message, 4000); }
+        return;
+      }
+      const f = fl[0];
       try { toast('파일 읽는 중…'); const r = await parseFile(f); imp.sheets = r.sheets; imp.si = 0; imp.newName = f.name.replace(/\.[^.]+$/, ''); detectCols(); imp.step = 2; renderImport(); }
       catch (err) { toast('읽기 실패: ' + err.message, 4000); }
     };
@@ -684,6 +698,7 @@ function renderImport() {
     };
     return;
   }
+  if (imp.step === 'multi') return renderMultiImport();
   const sheet = imp.sheets[imp.si]; const rows = sheet.rows; const ncol = Math.max(...rows.slice(0, 50).map(r => r.length), 2);
   const body = rows.slice(imp.header ? 1 : 0);
   const colOpts = sel => Array.from({ length: ncol }, (_, i) => `<option value="${i}" ${sel === i ? 'selected' : ''}>${String.fromCharCode(65 + (i % 26))}열${imp.header && rows[0][i] ? ' (' + esc(String(rows[0][i]).slice(0, 12)) + ')' : ''}</option>`).join('');
@@ -725,15 +740,62 @@ function renderImport() {
     go(dest); render();
   };
 }
-function detectCols() {
-  const rows = imp.sheets[imp.si].rows; if (!rows.length) { imp.header = false; return; }
-  imp.header = detectHeader(rows[0]);
+function detectFor(rows) {
+  if (!rows.length) return { header: false, colF: 0, colB: 1, colD: -1 };
+  const header = detectHeader(rows[0]);
   const hdr = rows[0].map(c => String(c ?? '').trim().toLowerCase());
-  const find = ws => hdr.findIndex(h => ws.includes(h));
+  const find = ws => header ? hdr.findIndex(h => ws.includes(h)) : -1;
   const f = find(['앞면', '앞', '단어', '용어', '질문', '질환', 'front', 'term', 'word', 'question']);
   const b = find(['뒷면', '뒤', '뜻', '정답', '답', '항생제', 'back', 'definition', 'meaning', 'answer']);
   const dcol = find(['세트', '과목', '분류', '카테고리', '단원', 'deck', 'category', 'subject']);
-  imp.colF = f >= 0 ? f : 0; imp.colB = b >= 0 ? b : (imp.colF === 0 ? 1 : 0); imp.colD = dcol >= 0 && dcol !== imp.colF && dcol !== imp.colB ? dcol : -1;
+  const colF = f >= 0 ? f : 0, colB = b >= 0 ? b : (colF === 0 ? 1 : 0);
+  return { header, colF, colB, colD: dcol >= 0 && dcol !== colF && dcol !== colB ? dcol : -1 };
+}
+function detectCols() { Object.assign(imp, detectFor(imp.sheets[imp.si].rows)); }
+
+/* several files at once: one set per file (or one subfolder per file split by its 단원/세트 column) */
+function renderMultiImport() {
+  const files = imp.multi; const ok = files.filter(f => !f.error);
+  const anySplit = ok.some(f => f.colD >= 0);
+  const cnt = f => f.rows.slice(f.header ? 1 : 0).filter(r => String(r[f.colF] ?? '').trim() || String(r[f.colB] ?? '').trim()).length;
+  const L = i => String.fromCharCode(65 + i);
+  const list = files.map(f => f.error ? `<div class="cardrow"><div class="txt"><div class="f">${esc(f.name)}</div><div class="b" style="color:var(--no)">읽기 실패: ${esc(f.error)}</div></div></div>` :
+    `<div class="cardrow"><div class="txt"><div class="f">📄 ${esc(f.name)}</div><div class="b">${cnt(f)}장 · 앞면 ${L(f.colF)}열 / 뒷면 ${L(f.colB)}열${f.header ? ' · 첫 행 제목' : ''}${f.colD >= 0 ? ` · 나누기: ${L(f.colD)}열 (${new Set(f.rows.slice(f.header ? 1 : 0).map(r => String(r[f.colD] ?? '').trim()).filter(Boolean)).size}개)` : ''}${f.sheets > 1 ? ' · 첫 시트만' : ''}</div></div></div>`).join('');
+  const startFolder = imp.folderSel !== undefined ? imp.folderSel : (imp.folderId || '');
+  openModal(`<h3>파일 ${files.length}개 가져오기</h3>
+    <div class="card-box" style="max-height:38dvh;overflow:auto;padding:4px 12px">${list}</div>
+    <label class="field"><span>넣을 폴더</span><select class="input" id="mi-folder"><option value="__new__">새 폴더 만들기</option><option value="" ${startFolder === '' ? 'selected' : ''}>(폴더 없음 · 최상위)</option>${folderOptions(startFolder || null)}</select></label>
+    <label class="field hidden" id="mi-newname-wrap"><span>새 폴더 이름</span><input class="input" id="mi-newname" value="가져온 파일"></label>
+    ${anySplit ? `<label class="switch"><span>단원/세트 열이 있는 파일은 하위 폴더로 만들고 값마다 세트로 나누기</span><input type="checkbox" id="mi-split" ${imp.split ? 'checked' : ''}></label>` : ''}
+    <label class="switch"><span>앞면이 같은 카드는 건너뛰기</span><input type="checkbox" id="mi-dup" ${imp.skipDup ? 'checked' : ''}></label>
+    <div class="help">파일 이름이 세트 이름이 됩니다. 같은 폴더에 같은 이름의 세트가 있으면 그 세트에 이어서 추가합니다.</div>
+    <div class="foot"><button class="btn" id="imp-back">이전</button><button class="btn primary" id="mi-go" ${ok.length ? '' : 'disabled'}>${ok.length}개 파일 가져오기</button></div>`);
+  const fs = $('#mi-folder'); const syncNew = () => $('#mi-newname-wrap').classList.toggle('hidden', fs.value !== '__new__'); fs.onchange = syncNew; syncNew();
+  $('#imp-back').onclick = () => { imp.step = 1; imp.multi = null; renderImport(); };
+  $('#mi-go').onclick = () => {
+    imp.skipDup = $('#mi-dup').checked; const split = !!($('#mi-split') && $('#mi-split').checked);
+    let target = fs.value; if (target === '__new__') target = createFolder($('#mi-newname').value || '가져온 파일', imp.folderId || null);
+    const base = target || null;
+    let total = 0, rowsAll = 0, decksMade = 0, foldersMade = 0;
+    const ensureDeck = (name, fid) => { const d = liveDecks().find(x => x.name === name && (x.folderId || null) === fid); if (d) return d.id; decksMade++; return createDeck(name, fid); };
+    for (const f of ok) {
+      const body = f.rows.slice(f.header ? 1 : 0).map(r => [r[f.colF], r[f.colB], f.colD >= 0 ? String(r[f.colD] ?? '').trim() : '']).filter(p => String(p[0] ?? '').trim() || String(p[1] ?? '').trim());
+      rowsAll += body.length;
+      if (split && f.colD >= 0) {
+        const groups = new Map(); for (const p of body) { const k = p[2] || '(미분류)'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push([p[0], p[1]]); }
+        const canNest = !base || folderDepth(base) < MAX_DEPTH;
+        let fid = base, prefix = '';
+        if (canNest) { const ex = childFolders(base).find(x => x.name === f.name); fid = ex ? ex.id : (foldersMade++, createFolder(f.name, base)); }
+        else prefix = f.name + ' · ';
+        for (const [name, ps] of groups) total += addCards(ensureDeck(prefix + name, fid), ps, imp.skipDup);
+      } else {
+        total += addCards(ensureDeck(f.name, base), body.map(p => [p[0], p[1]]), imp.skipDup);
+      }
+    }
+    const skipped = rowsAll - total;
+    closeModal(); toast(`${ok.length}개 파일 · ${total}장 가져옴${foldersMade ? ` · 폴더 ${foldersMade}개` : ''}${decksMade ? ` · 세트 ${decksMade}개` : ''}${skipped > 0 ? ` · 중복 ${skipped}장 건너뜀` : ''}`, 4000);
+    go(base ? '#/folder/' + base : '#/'); render();
+  };
 }
 
 /* ---------- events ---------- */

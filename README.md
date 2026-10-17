@@ -32,7 +32,11 @@ Quizlet 스타일의 낱말카드 암기 앱입니다. 설치 없이 브라우�
    ```
 3. 저장소 **Settings → Pages → Branch: main / (root)** 로 설정하면 몇 분 뒤 `https://<내아이디>.github.io/amnesia/` 에서 열립니다.
 
-## 구글 드라이브 연동 설정 (최초 1회, 약 5분)
+## 구글 드라이브 연동
+
+이 저장소의 앱에는 Google Cloud 프로젝트 `amnesia-511913`의 OAuth 클라이언트 ID가 기본값으로 들어 있습니다. 설정 화면에서 **Google 로그인**만 누르면 됩니다. 앱이 "테스트" 상태라 처음 로그인할 때 "Google에서 확인하지 않은 앱" 경고가 나오는데, **계속**을 누르고 Drive 파일 권한 체크박스를 켜면 됩니다. 테스트 상태에서는 약 7일마다 다시 로그인해야 합니다.
+
+다른 Google 계정이나 다른 주소에서 쓰려면 아래처럼 본인 프로젝트를 만들어 클라이언트 ID를 바꿔 넣으세요.
 
 1. [Google Cloud Console](https://console.cloud.google.com/)에서 새 프로젝트를 만듭니다.
 2. **API 및 서비스 → 라이브러리**에서 `Google Drive API`를 사용 설정합니다.
